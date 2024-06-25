@@ -264,8 +264,10 @@ timestamp = datetime.now().strftime("%H-%M-%S")
 refined_output = opus_refine(objective, [result for _, result in task_exchanges], timestamp, sanitized_objective)
 
 # Extract the project name from the refined output
-project_name_match = re.search(r'Project Name: (.*)', refined_output)
-project_name = project_name_match.group(1).strip() if project_name_match else sanitized_objective
+project_name_match = re.search(r"Project Name: (.*)", refined_output)
+project_name = (
+    project_name_match.group(1).strip() if project_name_match else sanitized_objective
+)[:15]
 
 # Extract the folder structure from the refined output
 folder_structure_match = re.search(r'<folder_structure>(.*?)</folder_structure>', refined_output, re.DOTALL)
