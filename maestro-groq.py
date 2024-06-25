@@ -304,6 +304,6 @@ exchange_log += refined_output
 
 console.print(f"\n[bold]Refined Final output:[/bold]\n{refined_output}")
 
-with open(filename, 'w') as file:
+with open(filename, "w", encoding="utf-8") as file:
     file.write(exchange_log)
 print(f"\nFull exchange log saved to {filename}")
