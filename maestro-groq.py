@@ -1,9 +1,13 @@
 import os
 import re
+import json
+import requests
 from rich.console import Console
 from rich.panel import Panel
 from datetime import datetime
-import json
+from datetime import timedelta
+from groq import Groq, RateLimitError
+from time import sleep
 
 # Set up the Groq API client
 from groq import Groq
@@ -19,6 +23,72 @@ REFINER_MODEL = "llama3-70b-8192"
 # Initialize the Rich Console
 console = Console()
 
+
+def parse_duration(duration_str):
+    """Parse a duration string into seconds."""
+    if "s" in duration_str:
+        return float(duration_str.rstrip("s"))
+    elif "m" in duration_str:
+        minutes, seconds = duration_str.split("m")
+        return int(minutes) * 60 + float(seconds.rstrip("s"))
+    return float(duration_str)
+
+
+def handle_rate_limit(func):
+    def wrapper(*args, **kwargs):
+        max_retries = 5
+        default_retry_delay = (
+            60  # Default to 60 seconds if we can't get the delay from the API
+        )
+
+        for attempt in range(max_retries):
+            try:
+                response = func(*args, **kwargs)
+
+                # Print rate limit info for successful requests
+                if isinstance(response, requests.Response):
+                    console.print(
+                        Panel(
+                            f"[green]Request successful[/green]\n"
+                            f"Requests remaining today: {response.headers.get('x-ratelimit-remaining-requests', 'N/A')}\n"
+                            f"Tokens remaining this minute: {response.headers.get('x-ratelimit-remaining-tokens', 'N/A')}\n"
+                            f"Requests reset in: {response.headers.get('x-ratelimit-reset-requests', 'N/A')}\n"
+                            f"Tokens reset in: {response.headers.get('x-ratelimit-reset-tokens', 'N/A')}",
+                            title="[bold blue]Rate Limit Info[/bold blue]",
+                            expand=False,
+                        )
+                    )
+
+                return response
+
+            # Specifically catch the groq.RateLimitError
+            except RateLimitError as e:
+                error_message = e.args[0]["error"]["message"]
+                retry_after_str = error_message.split("try again in ")[1].split(".")[0]
+                retry_after = parse_duration(retry_after_str)
+
+                if attempt < max_retries - 1:
+                    console.print(
+                        Panel(
+                            f"[yellow]Rate limit exceeded. Waiting for {retry_after} seconds before retrying (Attempt {attempt + 1}/{max_retries})...[/yellow]\n",
+                            title="[bold red]Rate Limit Exceeded[/bold red]",
+                            expand=False,
+                        )
+                    )
+                    sleep(retry_after)
+                else:
+                    console.print(
+                        "[red]Max retries reached. Unable to complete the request.[/red]"
+                    )
+                    raise
+            except Exception as e:
+                console.print(f"[red]An unexpected error occurred: {str(e)}[/red]")
+                raise
+
+    return wrapper
+
+
+@handle_rate_limit
 def opus_orchestrator(objective, file_content=None, previous_results=None):
     console.print(f"\n[bold]Calling Orchestrator for your objective[/bold]")
     previous_results_text = "\n".join(previous_results) if previous_results else "None"
@@ -45,6 +115,8 @@ def opus_orchestrator(objective, file_content=None, previous_results=None):
     console.print(Panel(response_text, title=f"[bold green]Groq Orchestrator[/bold green]", title_align="left", border_style="green", subtitle="Sending task to Subagent 👇"))
     return response_text, file_content
 
+
+@handle_rate_limit
 def haiku_sub_agent(prompt, previous_haiku_tasks=None, continuation=False):
     if previous_haiku_tasks is None:
         previous_haiku_tasks = []
@@ -75,6 +147,8 @@ def haiku_sub_agent(prompt, previous_haiku_tasks=None, continuation=False):
     console.print(Panel(response_text, title="[bold blue]Groq Sub-agent Result[/bold blue]", title_align="left", border_style="blue", subtitle="Task completed, sending result to Orchestrator 👇"))
     return response_text
 
+
+@handle_rate_limit
 def opus_refine(objective, sub_task_results, filename, projectname, continuation=False):
     console.print("\nCalling Opus to provide the refined final output for your objective:")
     messages = [
